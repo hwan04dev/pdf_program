@@ -1,24 +1,27 @@
-import streamlit as st
+import tkinter as tk
+from tkinter import filedialog, messagebox, ttk
 import subprocess
 import shutil
 import sys
 import os
-import tempfile
-from io import BytesIO
 
-# --- PDF 압축 핵심 기능 (Ghostscript 호출) ---
-def compress_pdf(input_path: str, output_path: str, quality_level: str) -> None:
+# --- PDF 압축 핵심 기능 ---
+def compress_pdf(input_path, output_path, quality_level):
     """
     Ghostscript를 사용하여 PDF를 압축합니다.
     - quality_level: 'screen', 'ebook', 'printer', 'prepress' 중 하나
-    오류 발생 시 예외를 발생시킵니다.
     """
     gs_command = find_ghostscript_executable()
     if not gs_command:
-        raise FileNotFoundError(
-            "Ghostscript를 찾을 수 없습니다. Ghostscript를 설치하고 PATH 환경 변수에 추가하세요."
+        messagebox.showerror(
+            "오류", 
+            "Ghostscript를 찾을 수 없습니다.\n"
+            "프로그램을 사용하려면 Ghostscript를 설치하고\n"
+            "PATH 환경 변수에 추가해야 합니다."
         )
+        return False
 
+    # Ghostscript 명령어 구성
     command = [
         gs_command,
         "-sDEVICE=pdfwrite",
@@ -28,134 +31,160 @@ def compress_pdf(input_path: str, output_path: str, quality_level: str) -> None:
         "-dQUIET",
         "-dBATCH",
         f"-sOutputFile={output_path}",
-        input_path,
+        input_path
     ]
 
-    startupinfo = None
-    if sys.platform == "win32":
-        startupinfo = subprocess.STARTUPINFO()
-        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    try:
+        # 서브프로세스로 Ghostscript 실행
+        # Windows에서는 CREATE_NO_WINDOW 플래그로 콘솔 창 숨김
+        startupinfo = None
+        if sys.platform == "win32":
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        
+        process = subprocess.run(
+            command, 
+            check=True, 
+            stdout=subprocess.PIPE, 
+            stderr=subprocess.PIPE,
+            startupinfo=startupinfo
+        )
+        return True
+    except FileNotFoundError:
+        messagebox.showerror("오류", "Ghostscript를 실행할 수 없습니다. 설치를 확인해주세요.")
+        return False
+    except subprocess.CalledProcessError as e:
+        error_message = f"PDF 압축 중 오류가 발생했습니다.\n{e.stderr.decode('utf-8', errors='ignore')}"
+        messagebox.showerror("압축 오류", error_message)
+        return False
+    except Exception as e:
+        messagebox.showerror("알 수 없는 오류", f"예상치 못한 오류가 발생했습니다: {e}")
+        return False
 
-    result = subprocess.run(
-        command,
-        check=False,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        startupinfo=startupinfo,
-    )
-    if result.returncode != 0:
-        err = result.stderr.decode("utf-8", errors="ignore")
-        raise RuntimeError(f"PDF 압축 중 오류가 발생했습니다.\n{err}")
-
-
-def find_ghostscript_executable() -> str | None:
+def find_ghostscript_executable():
     """
     시스템에서 Ghostscript 실행 파일을 찾습니다.
     (Windows: gswin64c.exe, gswin32c.exe / Linux/macOS: gs)
     """
     if sys.platform == "win32":
         for cmd in ["gswin64c", "gswin32c", "gs"]:
-            path = shutil.which(cmd)
-            if path:
-                return path
-    else:  # Linux, macOS
-        path = shutil.which("gs")
-        if path:
-            return path
+            if shutil.which(cmd):
+                return shutil.which(cmd)
+    else: # Linux, macOS
+        if shutil.which("gs"):
+            return shutil.which("gs")
     return None
 
+# --- GUI 애플리케이션 ---
+class PDFCompressorApp:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("PDF 압축기")
+        self.root.geometry("500x420")
+        self.root.resizable(True, True)
 
-# --- Streamlit 앱 ---
-st.set_page_config(page_title="PDF 압축기 (Streamlit)", page_icon="🗜️", layout="centered")
-st.title("🗜️ PDF 압축 프로그램")
-st.write("Ghostscript를 사용하여 PDF 파일 용량을 줄여줍니다.")
+        self.input_file_path = ""
 
-# Ghostscript 상태 표시
-with st.expander("환경 점검", expanded=False):
-    gs_path = find_ghostscript_executable()
-    if gs_path:
-        st.success(f"Ghostscript 감지: {gs_path}")
-    else:
-        st.error(
-            "Ghostscript가 설치되어 있지 않거나 PATH에 등록되어 있지 않습니다.\n"
-            "Windows: gswin64c.exe (또는 gswin32c.exe) 설치 후 PATH 추가\n"
-            "macOS/Linux: 'gs' 설치 후 PATH에 등록"
+        # 스타일 설정
+        self.style = ttk.Style()
+        self.style.configure("TButton", padding=6, relief="flat", font=('Helvetica', 10))
+        self.style.configure("TLabel", padding=5, font=('Helvetica', 10))
+        self.style.configure("TFrame", padding=10)
+        self.style.configure("Header.TLabel", font=('Helvetica', 14, 'bold'))
+
+        # 메인 프레임
+        main_frame = ttk.Frame(root, padding="20 20 20 20")
+        main_frame.pack(fill=tk.BOTH, expand=True)
+
+        # --- UI 요소 생성 ---
+        
+        # 1. 제목
+        header_label = ttk.Label(main_frame, text="PDF 압축 프로그램", style="Header.TLabel")
+        header_label.pack(pady=(0, 20))
+
+        # 2. 파일 선택
+        file_frame = ttk.Frame(main_frame)
+        file_frame.pack(fill=tk.X, pady=5)
+        
+        self.file_label = ttk.Label(file_frame, text="선택된 파일이 없습니다.", width=40, relief="sunken", anchor="w")
+        self.file_label.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=5)
+
+        browse_button = ttk.Button(file_frame, text="파일 찾기", command=self.browse_file)
+        browse_button.pack(side=tk.RIGHT, padx=(10, 0))
+
+        # 3. 압축 품질 선택
+        quality_frame = ttk.LabelFrame(main_frame, text="압축 품질 설정", padding="10 10")
+        quality_frame.pack(fill=tk.X, pady=10)
+
+        self.quality_var = tk.StringVar(value="ebook")
+        qualities = {
+            "낮음 (화면용)": "screen",
+            "중간 (전자책)": "ebook",
+            "높음 (인쇄용)": "printer",
+            "최고 (출판용)": "prepress"
+        }
+
+        for text, value in qualities.items():
+            rb = ttk.Radiobutton(quality_frame, text=text, variable=self.quality_var, value=value)
+            rb.pack(anchor="w", pady=2)
+
+        # 4. 압축 실행 버튼
+        compress_button = ttk.Button(main_frame, text="압축 시작", command=self.start_compression)
+        compress_button.pack(pady=20, fill=tk.X, ipady=5)
+
+    def browse_file(self):
+        file_path = filedialog.askopenfilename(
+            title="PDF 파일 선택",
+            filetypes=(("PDF 파일", "*.pdf"), ("모든 파일", "*.*"))
+        )
+        if file_path:
+            self.input_file_path = file_path
+            # 파일 이름이 너무 길면 잘라서 표시
+            display_name = os.path.basename(file_path)
+            if len(display_name) > 35:
+                display_name = "..." + display_name[-32:]
+            self.file_label.config(text=f" {display_name}")
+
+    def start_compression(self):
+        if not self.input_file_path:
+            messagebox.showwarning("알림", "먼저 압축할 PDF 파일을 선택해주세요.")
+            return
+
+        output_path = filedialog.asksaveasfilename(
+            title="압축된 PDF 파일 저장",
+            defaultextension=".pdf",
+            filetypes=(("PDF 파일", "*.pdf"),),
+            initialfile=f"{os.path.splitext(os.path.basename(self.input_file_path))[0]}_compressed.pdf"
         )
 
-# 파일 업로더
-uploaded = st.file_uploader("PDF 파일 업로드", type=["pdf"], accept_multiple_files=False)
+        if not output_path:
+            return # 사용자가 저장을 취소한 경우
 
-# 품질 선택
-qualities = {
-    "낮음 (화면용)": "screen",
-    "중간 (전자책)": "ebook",
-    "높음 (인쇄용)": "printer",
-    "최고 (출판용)": "prepress",
-}
-quality_label = st.radio("압축 품질 선택", list(qualities.keys()), index=1, horizontal=True)
-quality_value = qualities[quality_label]
+        quality = self.quality_var.get()
+        
+        # 압축 실행
+        self.root.config(cursor="wait") # 마우스 커서를 대기 모양으로 변경
+        self.root.update()
 
-# 출력 파일 이름 제안
-default_output_name = "compressed.pdf"
-if uploaded is not None:
-    base_name = os.path.splitext(os.path.basename(uploaded.name))[0]
-    default_output_name = f"{base_name}_compressed.pdf"
-
-out_name = st.text_input("출력 파일명", value=default_output_name)
-
-compress_clicked = st.button("압축 시작", type="primary", use_container_width=True, disabled=(uploaded is None))
-
-if compress_clicked:
-    if uploaded is None:
-        st.warning("먼저 PDF 파일을 업로드하세요.")
-        st.stop()
-
-    if not out_name.strip().lower().endswith(".pdf"):
-        out_name = out_name.strip() + ".pdf"
-
-    # 업로드 파일을 임시 경로로 저장
-    with tempfile.TemporaryDirectory() as tmpdir:
-        input_path = os.path.join(tmpdir, "input.pdf")
-        output_path = os.path.join(tmpdir, "output.pdf")
-
-        with open(input_path, "wb") as f:
-            f.write(uploaded.getbuffer())
-
-        try:
-            with st.spinner("압축 중입니다... 잠시만 기다려주세요."):
-                compress_pdf(input_path, output_path, quality_value)
-
-            # 결과 로드
-            with open(output_path, "rb") as f:
-                data = f.read()
-
-            original_size_mb = len(uploaded.getbuffer()) / (1024 * 1024)
-            compressed_size_mb = len(data) / (1024 * 1024)
-            reduction = (
-                ((original_size_mb - compressed_size_mb) / original_size_mb) * 100
-                if original_size_mb > 0
-                else 0.0
+        success = compress_pdf(self.input_file_path, output_path, quality)
+        
+        self.root.config(cursor="") # 마우스 커서 원래대로
+        
+        if success:
+            original_size = os.path.getsize(self.input_file_path) / (1024 * 1024) # MB
+            compressed_size = os.path.getsize(output_path) / (1024 * 1024) # MB
+            reduction = ((original_size - compressed_size) / original_size) * 100
+            
+            info_message = (
+                f"압축이 완료되었습니다!\n\n"
+                f"원본 크기: {original_size:.2f} MB\n"
+                f"압축 후 크기: {compressed_size:.2f} MB\n"
+                f"파일 크기 감소율: {reduction:.1f}%"
             )
+            messagebox.showinfo("완료", info_message)
 
-            st.success("압축이 완료되었습니다!")
-            col1, col2, col3 = st.columns(3)
-            col1.metric("원본 크기 (MB)", f"{original_size_mb:.2f}")
-            col2.metric("압축 후 크기 (MB)", f"{compressed_size_mb:.2f}")
-            col3.metric("감소율", f"{reduction:.1f}%")
 
-            st.download_button(
-                label="압축된 PDF 다운로드",
-                data=data,
-                file_name=out_name,
-                mime="application/pdf",
-                use_container_width=True,
-            )
-        except FileNotFoundError as e:
-            st.error(str(e))
-        except RuntimeError as e:
-            st.error(str(e))
-        except Exception as e:
-            st.exception(e)
-
-st.markdown("---")
-st.caption("이 앱은 Ghostscript를 호출하여 PDF를 재압축합니다. 환경에 따라 결과가 다를 수 있습니다.")
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = PDFCompressorApp(root)
+    root.mainloop()
